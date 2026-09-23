@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" alt="tg-router" width="120">
 
-# tg-router
+# tg-router-adapters
 
 **Quota-aware model routing for [Oh My Pi](https://github.com/oh-my-pi).**
 Picks which model answers each turn across every subscription and paid
@@ -178,11 +178,13 @@ Session state is committed only after the route was actually applied.
 |---|---|
 | [Bun](https://bun.sh) | 1.3+ |
 | [Oh My Pi](https://github.com/oh-my-pi) | the host agent; this is an extension, not a standalone tool |
-| A [9Router](https://github.com/9router) deployment | *optional but assumed*: the gateway that multiplexes subscription accounts. Without it only native and OpenRouter transports work. |
+| A [9Router](https://github.com/9router) deployment | *optional but assumed*: the gateway fork of 9router that multiplexes subscription accounts and performs quota-aware account selection. Without it only native and OpenRouter transports work. |
 | A TypeSafe key | *optional*: enables Jev-assisted classification. Without it the router runs on rules alone and says so. |
 | macOS | only for the launchd roster schedule; everything else is portable. |
 
 ```sh
+git clone https://github.com/thalysguimaraes/tg-router-adapters.git
+cd tg-router-adapters
 bun install
 bun run link        # symlinks this checkout into ~/.omp/agent/extensions/personal-router
 ```
@@ -254,7 +256,6 @@ bun run typecheck   # strict, every owned module including index.ts
 | `roster-probe.ts` | capability probe; five real calls, stops before harming a provider |
 | `roster-ui.ts` | `/route roster` review screen: findings, probe, vet |
 | `ninerouter-usage.ts` | 9Router telemetry, per-account windows, exhaustion tombstones |
-| `accounts.ts` | account priority steering |
 | `quota.ts` / `meridian.ts` | native and Meridian quota adapters |
 | `guarded-openrouter.ts` | paid transport guard; rejects unbudgeted calls |
 | `ninerouter.ts` | **generated bundle** of the 9Router transport + model catalog; do not hand-edit. It carries `@ts-nocheck` (emitted without annotations) and is excluded from `tsconfig.json`; the surface the router depends on is typed in `ninerouter-types.ts`, so drift after regeneration fails the typecheck at the call sites. |
