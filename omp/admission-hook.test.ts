@@ -12,11 +12,14 @@ import personalRouter from './index';
  * session had and the turn dead-ended with no way forward.
  */
 const MODEL = { provider: 'anthropic', id: 'claude-opus-5', contextWindow: 400_000, maxTokens: 8_192 };
+const ROUTER = { provider: 'router', id: 'auto' };
 const TERMINAL = '503 {"error":{"message":"[cc/claude-opus-5] [401]: Model claude-opus-5 is not supported"}}';
 
-async function session(pin?: { model: string; effort: string }) {
+/** `manual` = a concrete model picked in /model; otherwise the picker sits on router/auto. */
+async function session(manual = false) {
   const root = mkdtempSync(join(tmpdir(), 'tg-router-admission-'));
-  writeFileSync(join(root, 'settings.json'), JSON.stringify({ enabled: true, goValidated: [] }));
+  writeFileSync(join(root, 'settings.json'), JSON.stringify({ goValidated: [] }));
+  process.env.OMP_PERSONAL_ROUTER_HOME = root;
   const handlers = new Map<string, Function[]>();
   const notices: string[] = [];
   const states: any[] = [];
@@ -24,13 +27,14 @@ async function session(pin?: { model: string; effort: string }) {
   const pi: any = {
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     getThinkingLevel: () => 'high', setThinkingLevel: () => {}, getActiveTools: () => [], getAllTools: () => [],
-    setModel: async () => true, registerCommand: () => {}, appendEntry: (_key: string, value: any) => states.push(value),
+    setModel: async () => true, registerCommand: () => {}, registerProvider: () => {}, appendEntry: (_key: string, value: any) => states.push(value),
   };
+  const picked = manual ? MODEL : ROUTER;
   const ctx: any = {
-    mode: 'default', model: MODEL, models: { current: () => MODEL, list: () => [MODEL] },
+    mode: 'default', model: picked, models: { current: () => picked, list: () => [MODEL, ROUTER] },
     sessionManager: {
       getSessionId: () => 'session-1', getEntries: () => [], getParentSessionId: () => undefined,
-      getBranch: () => pin ? [{ type: 'custom', customType: 'personal-router-state', data: { pin } }] : [],
+      getBranch: () => [{ type: 'custom', customType: 'personal-router-state', data: { route: 'anthropic/claude-opus-5' } }],
     },
     modelRegistry: { authStorage: { listOAuthAccounts: () => [], pinSessionOAuthAccount: () => {} } },
     getContextUsage: () => ({ tokens: 1_000 }),
@@ -46,8 +50,8 @@ async function session(pin?: { model: string; effort: string }) {
 }
 
 describe('a transient provider failure never strands the session', () => {
-  test('pinned: a dropped connection does not refuse the next attempt', async () => {
-    const s = await session({ model: 'anthropic/claude-opus-5', effort: 'high' });
+  test('manual: a dropped connection does not refuse the next attempt', async () => {
+    const s = await session(true);
     await s.failWith('Connection error.');
     await s.emit('before_provider_request', {});
     expect(s.aborts()).toBe(0);
@@ -71,10 +75,9 @@ describe('a transient provider failure never strands the session', () => {
 });
 
 describe('a terminal provider failure does block', () => {
-  test('an unsupported model refuses the next attempt and releases a pin pointing at it', async () => {
-    const s = await session({ model: 'anthropic/claude-opus-5', effort: 'high' });
+  test('an unsupported model refuses the next attempt even under a manual pick', async () => {
+    const s = await session(true);
     await s.failWith(TERMINAL);
-    expect(s.state().pin).toBeUndefined();
     expect(s.state().blockedModels?.['anthropic/claude-opus-5']).toBeGreaterThan(Date.now());
     await s.emit('before_provider_request', {});
     expect(s.aborts()).toBe(1);
@@ -83,7 +86,7 @@ describe('a terminal provider failure does block', () => {
   test('the same failure during a retry blocks before the retry budget is spent', async () => {
     // Retries emit no message_end, so this must be caught on auto_retry_start
     // or the host spends all ten attempts on a permanent condition.
-    const s = await session({ model: 'anthropic/claude-opus-5', effort: 'high' });
+    const s = await session(true);
     await s.emit('auto_retry_start', { attempt: 1, maxAttempts: 10, delayMs: 1_000, errorMessage: TERMINAL });
     expect(s.state().blockedModels?.['anthropic/claude-opus-5']).toBeGreaterThan(Date.now());
     await s.emit('before_provider_request', {});

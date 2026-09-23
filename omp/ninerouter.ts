@@ -21321,6 +21321,22 @@ function finitePositiveInteger(value, fallback, maximum) {
 function capability(capabilities, key) {
   return capabilities && typeof capabilities === "object" && capabilities[key] === true ? true : false;
 }
+function thinkingEfforts(capabilities, modelId) {
+  if (!capability(capabilities, "reasoning"))
+    return;
+  const format = capabilities?.thinkingFormat;
+  if (format === "openai") {
+    return [...THINKING_EFFORTS];
+  }
+  if (format === "claude-adaptive") return ["low", "medium", "high", "max"];
+  if (format === "claude-budget") return ["low", "medium", "high", "max"];
+  if (format === "deepseek") return ["low", "high", "max"];
+  if (format === "zai") return ["low", "medium", "high"];
+  if (["qwen", "gemini-budget", "hunyuan", "step"].includes(format)) return ["low", "medium", "high"];
+  if (format === "gemini-level") return ["minimal", "low", "medium", "high"];
+  if (["kimi", "minimax"].includes(format)) return ["low", "medium", "high", "max"];
+  return ["medium", "high"];
+}
 function classify(parsed) {
   if (!parsed) {
     return { canonicalRef: undefined, subscribed: false, allowed: false, payg: false, reason: "invalid-model" };
@@ -21372,6 +21388,7 @@ function modelRecords(catalog) {
     const supportsImages = capability(capabilities, "vision");
     const supportsTools = capability(capabilities, "tools");
     const reasoning = capability(capabilities, "reasoning");
+    const efforts = thinkingEfforts(capabilities, parsed.id);
     const name = typeof row?.name === "string" && row.name.trim() ? row.name : parsed.id;
     result.push({
       ...parsed,
@@ -21381,6 +21398,7 @@ function modelRecords(catalog) {
       supportsImages,
       supportsTools,
       reasoning,
+      thinking: efforts ? { efforts } : undefined,
       name,
       rawIndex,
       ref: `${NINEROUTER_PROVIDER}/${parsed.id}`
@@ -21404,6 +21422,7 @@ function description(record) {
     supportsImages: record.supportsImages,
     supportsTools: record.supportsTools,
     reasoning: record.reasoning,
+    thinking: record.thinking,
     autoQualified: false,
     reason: record.reason
   };
@@ -21632,6 +21651,7 @@ function installNineRouter(pi, options) {
     gateway: true,
     baseUrl: NINEROUTER_BASE_URL,
     reasoning: record.reasoning,
+    thinking: record.thinking,
     input: record.supportsImages ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: record.contextWindow,

@@ -27,8 +27,8 @@ import { PROBE_FIXTURE_VERSION } from '../core/roster-probe';
 const installNineRouter=installNineRouterBundle as (pi:unknown,options:{root:string;nativeStreamSimple:unknown;log:(event:string,data?:unknown)=>void})=>NineRouterController;
 
 const VERSION='1.3.0';
-const REFS=['openai-codex/gpt-6-astra','openai-codex/gpt-5.6-sol','openai-codex/gpt-5.6-luna','anthropic/claude-fable-5-1','anthropic/claude-sonnet-5','anthropic/claude-opus-5','opencode-go/deepseek-v4.1-flash','opencode-go/glm-5.3-flash'];
-const BACKUPS=['openrouter/openai/gpt-5.6-sol','openrouter/anthropic/claude-opus-5','openrouter/openai/gpt-6-astra'];
+const REFS=['openai-codex/gpt-6-astra','openai-codex/gpt-6-sol','openai-codex/gpt-6-luna','anthropic/claude-fable-5-1','anthropic/claude-sonnet-5','anthropic/claude-opus-5-5','opencode-go/deepseek-v4.1-flash','opencode-go/glm-5.3-flash'];
+const BACKUPS=['openrouter/openai/gpt-6-astra'];
 /** After three consecutive classifier transport failures, stop calling it for this long. */
 const CLASSIFIER_BACKOFF_MS=120_000;
 const ref=(model:any)=>model ? `${model.provider}/${model.id}` : undefined;
@@ -94,6 +94,9 @@ export default function personalRouter(pi:any) {
   mkdirSync(root,{recursive:true,mode:0o700});
   const settingsFile=join(root,'settings.json');
   let ctxCurrent:any, state:any={}, child=false, lastActual:string|undefined, lastStatus:any, lastQuota:any, blocked=false;
+  // The concrete model the virtual `router/auto` entry delegates to. Set only
+  // by a completed routing decision; the stream refuses without it.
+  let route:{target:any;effort?:string}|undefined;
   let ledger:BudgetLedger|undefined, reservation:any;
   let nineRouter:NineRouterController;
   let gatewayUsage:any;
@@ -106,8 +109,11 @@ export default function personalRouter(pi:any) {
   // Immutable snapshot of the last routing decision's inputs, so a provider
   // attempt can be re-admitted without reclassifying or refreshing quota.
   let lastAttemptContext:any;
-  const settings=()=>parse(settingsFile,{enabled:true,goValidated:[],goVisionValidated:[],paidFallbackEnabled:false});
+  const settings=()=>parse(settingsFile,{goValidated:[],goVisionValidated:[],paidFallbackEnabled:false});
   const TYPESAFE_PROVIDER='typesafe';
+  const ROUTER_PROVIDER='router', ROUTER_MODEL='router', ROUTER_API='personal-router-virtual';
+  /** Auto = the user selected the router entry in /model. Any concrete model is manual. */
+  const isAuto=(model:any)=>model?.provider===ROUTER_PROVIDER;
   /**
    * The user sees two states: auto and pin. Inside auto, Jev assists whenever a
    * key is present; otherwise rules run alone and the status line says so.
@@ -250,14 +256,28 @@ export default function personalRouter(pi:any) {
     }catch{return{siblings:[]};}
   }
   nineRouter=installNineRouter(pi,{root,nativeStreamSimple:streamSimple,log});
+  // The router is a model in the picker, not a mode. Selecting `router/auto`
+  // routes; selecting any concrete model is manual, no command needed.
+  // ponytail: contextWindow is a static ceiling; per-attempt admission checks the real route's window.
+  pi.registerProvider(ROUTER_PROVIDER,{
+    name:'Router',baseUrl:'https://router.invalid',apiKey:'personal-router-virtual',api:ROUTER_API,
+    models:[{id:ROUTER_MODEL,name:'Router (auto)',reasoning:true,thinking:{efforts:['off','minimal','low','medium','high','xhigh','max']},input:['text','image'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:400_000,maxTokens:32768}],
+    streamSimple:(model:any,context:any,options:any={})=>{
+      if(model?.provider!==ROUTER_PROVIDER||!route){log('router-stream-refused',{model:ref(model),decided:!!route});throw new Error('router: no admitted route for this request');}
+      const target=route.target;
+      const opts={...options,apiKey:ctxCurrent.modelRegistry.resolver(target,ctxCurrent.sessionManager.getSessionId()),headers:undefined,fetch:undefined,maxInFlightRequests:{}};
+      if(route.effort)opts.reasoning=route.effort;
+      return streamSimple(target,context,opts);
+    },
+  });
   const diagnostics=installProviderDiagnostics(pi,{log,notify,changed:status});
   // Source of the last automatic decision, always visible: a silent fallback
   // from jev to rules is exactly the kind of failure that hides.
-  let lastSource:'jev'|'rules'|undefined;
+  let lastSource:'jev'|'rules'|'override'|undefined;
   function status() {
-    const value=state.disabled?'manual':state.pin?'pin':'auto';
-    const source=value==='auto'&&lastSource?` · ${lastSource}`:'';
-    ctxCurrent?.ui.setStatus('personal-router',`route ${value}${source} · ${lastActual?.split('/').pop()??'ready'}${diagnostics.label?` · ${diagnostics.label}`:''}`);
+    const auto=isAuto(ctxCurrent?.models?.current());
+    const source=auto&&lastSource?` · ${lastSource}`:'';
+    ctxCurrent?.ui.setStatus('personal-router',`route ${auto?'auto':'manual'}${source} · ${lastActual?.split('/').pop()??'ready'}${diagnostics.label?` · ${diagnostics.label}`:''}`);
   }
   function init(ctx:any) {
     ctxCurrent=ctx;
@@ -267,12 +287,11 @@ export default function personalRouter(pi:any) {
     state=[...ctx.sessionManager.getBranch()].reverse().find((e:any)=>e.type==='custom'&&e.customType==='personal-router-state')?.data??{};
     // A child inherits a floor from the parent's subagent role, not a user role.
     if(child&&!state.childFloor)state.childFloor=childFloorFor(nativeInit?.modelRole);
-    if(!child && process.argv.some(a=>a==='--model'||a.startsWith('--model='))) state.pin={model:ref(ctx.model),effort:pi.getThinkingLevel()};
-    lastActual=ref(ctx.model);
+    lastActual=isAuto(ctx.model)?state.route:ref(ctx.model);
     readGatewayUsage();
     refreshGatewayUsage();
     status();
-    log('loaded',{mode:ctx.mode,model:lastActual,manualPin:!!state.pin,childFloor:state.childFloor,enabled:settings().enabled!==false,gateway:nineRouter.enabled});
+    log('loaded',{mode:ctx.mode,model:ref(ctx.model),route:state.route,childFloor:state.childFloor,gateway:nineRouter.enabled});
   }
   pi.on('session_start',(_e:any,ctx:any)=>init(ctx));
   pi.on('session_switch',(_e:any,ctx:any)=>init(ctx));
@@ -283,16 +302,18 @@ export default function personalRouter(pi:any) {
   pi.on('before_agent_start',async(event:any,ctx:any)=>{
     ctxCurrent=ctx; blocked=false;
     const cfg=settings();
-    if(cfg.enabled===false||state.disabled){if(ctx.model?.provider==='openrouter'&&!ctx.model[GUARDED_OPENROUTER_MARKER])await pi.setModel(guardOpenRouterModel(ctx.model,guard.apiId));lastActual=ref(ctx.model);status();return;}
+    // Manual: a concrete model in the picker. No classification, no spend; the
+    // only intervention is the OpenRouter budget guard, which is transport safety.
+    if(!isAuto(ctx.model)){if(ctx.model?.provider==='openrouter'&&!ctx.model[GUARDED_OPENROUTER_MARKER])await pi.setModel(guardOpenRouterModel(ctx.model,guard.apiId));route=undefined;lastAttemptContext=undefined;lastActual=ref(ctx.model);status();return;}
     try {
       readGatewayUsage();
       refreshGatewayUsage();
-      const current=ref(ctx.models.current());
-      if(lastActual&&current&&current!==lastActual&&!state.providerFailed){state.pin={model:current,effort:pi.getThinkingLevel()};}
+      // The route last decided for this session, never the picker entry itself.
+      const current:string|undefined=state.route;
       const gatewayRefs=nineRouter.enabled?nineRouter.models
         .filter((m:any)=>typeof m.canonicalRef==='string'&&REFS.includes(m.canonicalRef))
         .map((m:any)=>`${m.provider}/${m.id}`):[];
-      const ids=new Set([...REFS,...gatewayRefs,...(cfg.paidFallbackEnabled?BACKUPS:[]),...(current?[current]:[]),...(state.pin?.model?[state.pin.model]:[])]);
+      const ids=new Set([...REFS,...gatewayRefs,...(cfg.paidFallbackEnabled?BACKUPS:[]),...(current?[current]:[])]);
       const available=ctx.models.list();
       const models=[...ids].map(id=>available.find((m:any)=>ref(m)===id)).filter(Boolean);
       const gatewayCache=readGatewayUsage();
@@ -340,7 +361,7 @@ export default function personalRouter(pi:any) {
           validated:goModelId?goValidation(cfg,goModelId,modelRef):undefined,
           quota:unavailableUntil>Date.now()?({observedAt:Date.now(),state:'depleted',windows:[{id:'runtime-model-backoff',exhausted:true,resetsAt:unavailableUntil}]} satisfies QuotaSnapshot):quotas.get(modelRef)?.quota,
           payg:gateway?(description?.payg===true):m.provider==='openrouter',
-          qualityTiers:BACKUPS.includes(modelRef)?(m.id.includes('gpt-5.6-sol')?['mechanical','bounded','execution']:['mechanical','bounded','execution','complex','premium']):undefined,
+          qualityTiers:BACKUPS.includes(modelRef)?['mechanical','bounded','execution','complex','premium']:undefined,
           // Same conservative bound the ledger reserves against, so the price
           // the allocator compares is the price admission will demand.
           taskCostUsd:m.provider==='openrouter'&&Number.isFinite(m.maxTokens)?(()=>{
@@ -349,20 +370,22 @@ export default function personalRouter(pi:any) {
         };
       });
       const contract=child && /(?:scope|escopo)\s*:/i.test(event.prompt) && /(?:acceptance|aceite|criterios? de aceite)\s*:/i.test(event.prompt);
-      const input:any={prompt:event.prompt,now:Date.now(),models:routeModels,current:current?{model:current,effort:pi.getThinkingLevel(),tier:state.tier,phase:state.phase}:undefined,previous:state.tier?{tier:state.tier,phase:state.phase}:undefined,childFloor:state.childFloor,manualPin:state.pin,contextTokens,outputMarginTokens:8192,needsImages,needsTools:pi.getActiveTools().length>0,boundary:state.providerFailed?'provider-failure':child&&!state.tier?'child':'user',task:{bounded:contract,acceptanceDefined:contract,failedQualityChecks:state.failedQualityChecks??0,highValue:state.highValue},promotion,paidFallback:{authorized:false,budgetReserved:false,allowedModels:[]},handoffReady:state.handoffReady??false};
+      const input:any={prompt:event.prompt,now:Date.now(),models:routeModels,current:current?{model:current,effort:pi.getThinkingLevel(),tier:state.tier,phase:state.phase}:undefined,previous:state.tier?{tier:state.tier,phase:state.phase}:undefined,childFloor:state.childFloor,contextTokens,outputMarginTokens:8192,needsImages,needsTools:pi.getActiveTools().length>0,boundary:state.providerFailed?'provider-failure':child&&!state.tier?'child':'user',task:{bounded:contract,acceptanceDefined:contract,failedQualityChecks:state.failedQualityChecks??0},promotion,paidFallback:{authorized:false,budgetReserved:false,allowedModels:[]},handoffReady:state.handoffReady??false};
       input.hasWorkContext=messages.some((message:any)=>message?.role==='assistant');
       if(child&&!state.tier)input.siblings=fanoutSiblings(ctx).siblings;
       // Work other live agents already committed against the same shared
       // allowances. Advisory: the provider's own accounting stays authoritative.
       try{const self=ownAgentId(ctx);input.inFlightByWindow=readInFlightWindows(fanoutDir,self??'');}catch{}
+      // The rules baseline is THIS request's classification, computed once and
+      // fed explicitly to the allocator. A prompt override ("use strong") is
+      // the human's decision: it skips the classifier and never spends.
+      const rulesClassification=classifyTask(input);
       // Semantic classification: mode-gated, budget-gated, fail-closed. Shadow
       // records but never changes the executed decision. Classification only
       // happens at a safe boundary (here), never per tool-loop continuation.
       // auto = rules + Jev-assisted when a key exists. No key => rules only.
-      // Pin and manual skip classification entirely; they never spend.
       const semantic=semanticSettings();
-      const keyPresent=!state.disabled&&!state.pin&&!!(await typesafeKey());
-      semanticMode=state.disabled||state.pin?'off':keyPresent?semantic.mode:'off';
+      semanticMode=!rulesClassification.override&&await typesafeKey()?semantic.mode:'off';
       let semanticAssessment:SemanticAssessment|undefined;
       let semanticTrace:any;
       // A short follow-up ("yep", "you seem stuck") carries no task of its own.
@@ -379,7 +402,7 @@ export default function personalRouter(pi:any) {
       const previousTurnErrored=messageStopReason(lastAssistant)==='error'||state.providerFailed===true;
       const previousTurnToolCalls=messageToolCalls(lastAssistant);
       const priorUserTurns=messages.filter((msg:any)=>msg?.role==='user').length;
-      if(semanticMode!=='off'&&!state.pin){
+      if(semanticMode!=='off'){
         const routingContext=buildRoutingContext({
           taskGoal:episode.goal,
           currentUserRequest:String(event.prompt??''),
@@ -414,13 +437,10 @@ export default function personalRouter(pi:any) {
           }
         }
       }
-      // The rules baseline is THIS request's classification, computed once and
-      // fed explicitly to the allocator. Semantic evidence may raise the tier
-      // or clarify the phase; nothing is smuggled through session state.
-      const rulesClassification=classifyTask(input);
+      if(rulesClassification.override)input.classification={tier:rulesClassification.tier,phase:rulesClassification.phase};
       let semanticResolution:{tier:RouteTier;phase:RoutePhase;source:'rules'|'semantic-assisted'|'semantic-downgrade';reason:string}|undefined;
       if(semanticMode!=='off'&&semanticAssessment){
-        const resolveWith=(mode:SemanticMode)=>resolveClassification({assessment:semanticAssessment,rulesClassification,mode,floorTier:state.childFloor?.tier,floorLocksPhase:!!state.childFloor,highValue:state.highValue===true,failedQualityChecks:state.failedQualityChecks??0,previousTurnErrored,priorUserTurns});
+        const resolveWith=(mode:SemanticMode)=>resolveClassification({assessment:semanticAssessment,rulesClassification,mode,floorTier:state.childFloor?.tier,floorLocksPhase:!!state.childFloor,failedQualityChecks:state.failedQualityChecks??0,previousTurnErrored,priorUserTurns});
         if(semanticMode==='shadow'){
           // Shadow: a real assisted proposal against the same frozen input, recorded only.
           const proposal=resolveWith('assisted');
@@ -434,9 +454,9 @@ export default function personalRouter(pi:any) {
       if(semanticTrace)log('semantic-router',{...semanticTrace,cacheSize:assessmentCache.size});
       lastSemanticTrace=semanticTrace??lastSemanticTrace;
       // "jev" only when a usable assessment actually shaped the executed decision.
-      lastSource=input.classification?'jev':'rules';
+      lastSource=rulesClassification.override?'override':input.classification?'jev':'rules';
       let decision=decideRoute(input);
-      if(decision.action==='unavailable'&&cfg.paidFallbackEnabled&&!state.pin){
+      if(decision.action==='unavailable'&&cfg.paidFallbackEnabled){
         await reconcile(ctx);
         // This second pass proposes a candidate only. No switch/dispatch occurs until atomic reservation succeeds below.
         const proposed=decideRoute({...input,paidFallback:{authorized:true,budgetReserved:true,allowedModels:BACKUPS}});
@@ -453,7 +473,7 @@ export default function personalRouter(pi:any) {
       lastStatus=decision;
       lastAttemptContext=undefined;
       if(decision.action==='unavailable'||!decision.model){
-        blocked=true;ctx.abort();log('blocked',{reason:decision.reason,rejected:decision.rejected,contextTokens});notify('Routing: nenhuma rota adequada disponível. /route status mostra o motivo; /route pin provider/model fixa uma alternativa.','warning');return;
+        blocked=true;ctx.abort();log('blocked',{reason:decision.reason,rejected:decision.rejected,contextTokens});notify('Routing: nenhuma rota adequada disponível. /route mostra o motivo; escolha um modelo concreto em /model para seguir manualmente.','warning');return;
       }
       let target=models.find((m:any)=>ref(m)===decision.model);
       if(!target){releaseUndispatched();blocked=true;ctx.abort();log('blocked',{reason:'selected-model-unavailable',model:decision.model});notify('Routing: catálogo da rota selecionada indisponível.','warning');return;}
@@ -465,17 +485,16 @@ export default function personalRouter(pi:any) {
         target=withMeridianProfile(target,q.profile,ctx.sessionManager.getSessionId());
       }
       if(target.provider!=='9router'&&q?.credentialId&&target.provider!=='opencode-go')ctx.modelRegistry.authStorage.pinSessionOAuthAccount(target.provider,ctx.sessionManager.getSessionId(),q.credentialId);
-      if(decision.model!==current||(target.provider==='openrouter'&&!ctx.models.current()?.[GUARDED_OPENROUTER_MARKER])||(target.provider==='anthropic'&&cfg.claudeAccountOwner==='meridian'&&(state.claudeProfile!==q?.profile||ctx.models.current()?.headers?.['x-meridian-profile']!==q?.profile))){
-        const ok=await pi.setModel(target);
-        if(!ok){releaseUndispatched();blocked=true;ctx.abort();log('blocked',{reason:'native-setModel-unavailable',model:decision.model});notify('Routing: autenticação da rota selecionada indisponível.','warning');return;}
-      }
-      if(decision.effort&&!state.pin?.effort)pi.setThinkingLevel(decision.effort);
+      // No model switch: the picker stays on router/auto and the stream
+      // delegates to `route`. Auth is resolved per request by the registry.
+      route={target};
+      if(decision.effort)pi.setThinkingLevel(decision.effort);
       // State is committed only after the route was actually applied.
-      state={...state,tier:decision.tier,phase:decision.phase,episode:{...episode,phase:decision.phase},providerFailed:false,handoffReady:false,...(q?.profile?{claudeProfile:q.profile}:{})};
+      state={...state,route:decision.model,tier:decision.tier,phase:decision.phase,episode:{...episode,phase:decision.phase},providerFailed:false,handoffReady:false,...(q?.profile?{claudeProfile:q.profile}:{})};
       // Frozen DECISION (route identity, committed tier, capability snapshots).
       // Execution facts (context size, quota, clock) are rebuilt per attempt.
       lastAttemptContext={models:routeModels,model:decision.model,tier:decision.tier,contextTokens,outputMarginTokens:input.outputMarginTokens,needsImages,needsTools:input.needsTools,quotaMaxAgeMs:input.quotaMaxAgeMs,episodeId:episode.id};
-      lastActual=ref(ctx.models.current())??decision.model;
+      lastActual=decision.model;
       save();status();
       try{
         const agentId=ownAgentId(ctx);
@@ -499,7 +518,7 @@ export default function personalRouter(pi:any) {
       const actualCanonicalModel=routeModels.find((m:any)=>m.ref===lastActual)?.canonicalRef??canonical(lastActual);
       log('decision',{requestedModel:decision.model,requestedWireModel:decision.model,requestedCanonicalModel,actualModel:lastActual,actualWireModel:lastActual,actualCanonicalModel,effort:pi.getThinkingLevel(),reason:decision.reason,tier:decision.tier,phase:decision.phase,contextTokens,needsImages,preferredCredentialId:target.provider==='9router'?undefined:q?.credentialId,actualCredentialId:target.provider==='9router'?undefined:q?.accountOwner==='meridian'?undefined:active?.credentialId,preferredProfile:q?.profile,accountOwner:target.provider==='9router'?'gateway':q?.accountOwner??'omp-native',quota:q?.quota,promotion:{active:promotion.active,confirmedAt:promotion.confirmedAt},rejected:decision.rejected});
     }catch(error:any){
-      releaseUndispatched();blocked=true;ctx.abort();log('router-error',{errorType:error?.name??'Error'});notify('Routing: falha de verificação. A chamada foi interrompida; /route off mantém o controle manual.','error');
+      releaseUndispatched();blocked=true;ctx.abort();log('router-error',{errorType:error?.name??'Error'});notify('Routing: falha de verificação. A chamada foi interrompida; escolha um modelo concreto em /model para seguir manualmente.','error');
     }
   });
 
@@ -521,15 +540,16 @@ export default function personalRouter(pi:any) {
     return {model:{...base,quota},input:{prompt:'',now,models:record.models,contextTokens,outputMarginTokens:record.outputMarginTokens,needsImages:record.needsImages,needsTools:record.needsTools,quotaMaxAgeMs:record.quotaMaxAgeMs,current:{model:record.model,tier:record.tier}}};
   }
   pi.on('before_provider_request',(_event:any,ctx:any)=>{
-    const m=ctx.model??ctx.models.current();
+    const picked=ctx.model??ctx.models.current();
     // Every attempt, including tool-loop continuations, is checked against the
     // route it is actually about to use. Classification is NOT redone here: a
     // continuation must not pay for an assessment or change models mid-loop.
+    // Under router/auto the attempt runs on the delegate; a concrete pick is
+    // manual and still checked against terminal blocks the router knows.
+    const auto=isAuto(picked);
+    const m=auto?route?.target:picked;
     const modelRef=ref(m);
-    // A pin chooses the route; it does not exempt the attempt from facts the
-    // router already knows. The committed-tier floor is automatic-mode only.
-    const pinned=!!state.pin;
-    if(!state.disabled&&settings().enabled!==false&&modelRef){
+    if(modelRef){
       // Only a TERMINAL block refuses an attempt outright. A transient
       // backoff is allocation input, not grounds to strand the session.
       // No decision record at all means the router has not decided yet
@@ -539,11 +559,11 @@ export default function personalRouter(pi:any) {
       const blockedUntil=state.blockedModels?.[modelRef];
       const facts=lastAttemptContext?attemptFacts(ctx,lastAttemptContext,modelRef):undefined;
       const admitted=blockedUntil>Date.now()?{ok:false as const,reason:'route is not served by the upstream'}
-        :facts?admitAttempt(facts.model,facts.input,pinned?undefined:lastAttemptContext.tier)
-        :!lastAttemptContext||pinned?{ok:true as const}
+        :facts?admitAttempt(facts.model,facts.input,auto?lastAttemptContext.tier:undefined)
+        :!lastAttemptContext||!auto?{ok:true as const}
         :{ok:false as const,reason:'route was never admitted by the routing decision'};
       if(!admitted.ok){
-        blocked=true;ctx.abort();log('attempt-blocked',{model:modelRef,decided:lastAttemptContext?.model,pinned,reason:admitted.reason});
+        blocked=true;ctx.abort();log('attempt-blocked',{model:modelRef,decided:lastAttemptContext?.model,auto,reason:admitted.reason});
         notify(`Routing: rota atual inválida para esta chamada (${admitted.reason}).`,'warning');
         return;
       }
@@ -555,7 +575,7 @@ export default function personalRouter(pi:any) {
   pi.on('message_end',async(event:any,ctx:any)=>{
     if(event.message?.role!=='assistant')return;
     const m=event.message;
-    const actual=m.provider&&m.model?`${m.provider}/${m.model}`:ref(ctx.models.current());
+    const actual=m.provider===ROUTER_PROVIDER?ref(route?.target):m.provider&&m.model?`${m.provider}/${m.model}`:isAuto(ctx.models.current())?ref(route?.target):ref(ctx.models.current());
     lastActual=actual;
     const gatewayResponse=m.provider==='9router';
     const active=gatewayResponse?undefined:ctx.modelRegistry.authStorage.listOAuthAccounts(m.provider??ctx.model?.provider,ctx.sessionManager.getSessionId()).find((a:any)=>a.active);
@@ -566,7 +586,7 @@ export default function personalRouter(pi:any) {
       state.providerFailed=true;
       // Two different facts, two different lifetimes. A model the upstream
       // does not serve is PERMANENT: it can never answer, so it is blocked
-      // outright and a pin pointing at it is released. Everything else —
+      // outright. Everything else —
       // timeouts, dropped connections, 5xx — is TRANSIENT: it steers
       // automatic allocation away for a few minutes but must never refuse an
       // attempt, or one network blip strands a session with no route at all.
@@ -576,9 +596,8 @@ export default function personalRouter(pi:any) {
           state.blockedModels={...state.blockedModels,[actual]:Date.now()+86_400_000};
           delete state.unavailableModels?.[actual];
         }
-        log('model-unsupported',{model:actual,pinReleased:state.pin?.model===actual});
-        if(state.pin?.model===actual){delete state.pin;notify(`Routing: ${actual} não é servido pelo upstream; pin removido e roteamento automático retomado.`,'warning');}
-        else notify(`Routing: ${actual} não é servido pelo upstream; rota bloqueada.`,'warning');
+        log('model-unsupported',{model:actual});
+        notify(`Routing: ${actual} não é servido pelo upstream; rota bloqueada.`,'warning');
       }
       // An unidentifiable responder cannot be backed off by ref; the profile path still applies.
       else if(m.provider==='anthropic'&&state.claudeProfile){state.unavailableProfiles={...state.unavailableProfiles,[state.claudeProfile]:Date.now()+180000};}
@@ -597,13 +616,11 @@ export default function personalRouter(pi:any) {
   // block lands before the next before_provider_request, which then refuses.
   pi.on('auto_retry_start',(event:any)=>{
     if(!unsupportedModel(event?.errorMessage))return;
-    const target=lastActual??ref(ctxCurrent?.models?.current());
+    const target=lastActual;
     if(!target)return;
     state.blockedModels={...state.blockedModels,[target]:Date.now()+86_400_000};
-    const pinReleased=state.pin?.model===target;
-    if(pinReleased)delete state.pin;
-    log('model-unsupported',{model:target,pinReleased,duringRetry:true});
-    notify(`Routing: ${target} não é servido pelo upstream; rota bloqueada${pinReleased?' e pin removido':''}.`,'warning');
+    log('model-unsupported',{model:target,duringRetry:true});
+    notify(`Routing: ${target} não é servido pelo upstream; rota bloqueada.`,'warning');
     save();
   });
   pi.on('agent_end',()=>{
@@ -615,26 +632,15 @@ export default function personalRouter(pi:any) {
     nineRouter.dispose();guard.dispose();releaseUndispatched();ledger?.close();ledger=undefined;});
 
   pi.registerCommand('route',{
-    description:'Routing: status | auto | off | pin provider/model | roster | key [status|clear] | why | feedback fail/success | handoff | high-value',
+    description:'Routing: status | roster | key [status|clear] | why | feedback fail/success | handoff | usage | refresh | reconcile. Auto = pick "Router (auto)" in /model; any concrete model is manual. "use strong/opus/..." in a prompt overrides for that turn.',
     handler:async(args:string,ctx:any)=>{
       ctxCurrent=ctx;
       const normalized=args.trim();
       const [cmd,...rest]=(normalized?normalized:'status').split(/\s+/);
-      // `auto` is a full reset: a new task, not a continuation of the old one.
-      if(cmd==='auto'){state.pin=undefined;state.tier=undefined;state.phase=undefined;state.episode=undefined;state.disabled=false;state.providerFailed=false;const assisted=!!(await typesafeKey());notify(assisted?'Auto: regras + Jev.':'Auto: só regras. /route key liga o Jev.');}
-      else if(cmd==='off'){state.disabled=true;notify('Routing manual nesta sessão. /route auto reativa.');}
-      else if(cmd==='pin'){
-        const resolved=ctx.models.resolve(rest[0]??'');
-        const target=resolved?guardOpenRouterModel(resolved,guard.apiId):undefined;
-        if(!target){notify('Modelo não encontrado no catálogo autenticado.','warning');return;}
-        if(isGateway(target)&&!nineRouter.isAllowed(ref(target)!)){notify('Modelo 9Router não está autorizado para transporte.','warning');return;}
-        if(!(await pi.setModel(target))){notify('Modelo sem autenticação disponível.','warning');return;}
-        state.pin={model:ref(target),effort:pi.getThinkingLevel()};state.disabled=false;lastActual=ref(target);notify(`Modelo fixado: ${lastActual}`);
-      }else if(cmd==='feedback'){
+      if(cmd==='feedback'){
         state.failedQualityChecks=rest[0]==='fail'?(state.failedQualityChecks??0)+1:0;notify(`Falhas de aceite registradas: ${state.failedQualityChecks}.`);
       // A handoff ends the phase but not the work: keep the goal, new epoch.
       }else if(cmd==='handoff'){state.handoffReady=true;state.phase=undefined;state.episode=advanceDecisionEpoch(state.episode);notify('Estado de trabalho preparado; próxima solicitação pode mudar de modelo/família.');}
-      else if(cmd==='high-value'){state.highValue=!state.highValue;notify(`Uso de reserva para tarefa de alto valor: ${state.highValue?'ativo':'inativo'}.`);}
       else if(cmd==='usage'){notify(JSON.stringify({gateway:nineRouter.enabled,gatewayUsage:usageSummary(readGatewayUsage())},null,2));return;}
       else if(cmd==='refresh'){
         if(!nineRouter.enabled){notify('Telemetria 9Router indisponível.','warning');return;}
@@ -699,20 +705,19 @@ export default function personalRouter(pi:any) {
       else if(cmd==='reconcile'){await reconcile(ctx);notify(JSON.stringify(budget().snapshot(),null,2));return;}
       else if(cmd==='why'||cmd==='explain'){
         // One deterministic sentence built from validated fields; nothing generated.
-        if(state.disabled){notify('Manual: routing desligado nesta sessão; o modelo atual é o que você escolheu.');return;}
-        if(state.pin){notify(`Manual: fixado em ${state.pin.model}; routing automático não se aplica.`);return;}
+        if(!isAuto(ctx.models.current())){notify(`Manual: ${ref(ctx.models.current())} escolhido em /model; routing automático não se aplica.`);return;}
         const d=lastStatus;
         if(!d){notify('Auto: nenhuma decisão ainda nesta sessão.');return;}
         const trace=lastSemanticTrace;
         const jev=trace?.result==='assessed'?`Jev avaliou ${trace.tierAssessed}/${trace.phaseAssessed}${trace.truncated?' (contexto truncado)':''}`:trace?.result?`Jev indisponível (${trace.result})`:semanticMode==='off'?'Jev sem chave (/route key liga)':'Jev não consultado';
-        const origin=lastSource==='jev'?'e a avaliação moldou a decisão':lastSource==='rules'&&trace?.result==='assessed'?'mas as regras prevaleceram':'; regras determinísticas decidiram';
+        const origin=lastSource==='override'?'; o prompt nomeou o tier':lastSource==='jev'?'e a avaliação moldou a decisão':lastSource==='rules'&&trace?.result==='assessed'?'mas as regras prevaleceram':'; regras determinísticas decidiram';
         const chosen=d.model?`${d.model.split('/').pop()} (${d.tier}, ${d.phase})`:'nenhuma rota';
         const quota=d.quotaState?`, quota ${d.quotaState}`:'';
         notify(`Auto: ${chosen}${quota}. ${jev} ${origin}. ${d.reason}`);
         return;
       }
-      else {notify(JSON.stringify({version:VERSION,enabled:settings().enabled!==false,manual:!!state.disabled,childFloor:state.childFloor,pin:state.pin,child,current:ref(ctx.models.current()),decision:lastStatus,providerFailure:diagnostics.failure,quota:lastQuota?.quota,gateway:nineRouter.enabled,gatewayUsage:usageSummary(readGatewayUsage()),semantic:{mode:semanticSettings().mode,effective:semanticMode,last:lastSemanticTrace},blocked,budget:budget().snapshot(),logs:join(root,'events.jsonl')},null,2));return;}
-      save();status();log('command',{command:cmd,pin:state.pin?.model,disabled:!!state.disabled});
+      else {notify(JSON.stringify({version:VERSION,auto:isAuto(ctx.models.current()),route:state.route,childFloor:state.childFloor,child,current:ref(ctx.models.current()),decision:lastStatus,source:lastSource,providerFailure:diagnostics.failure,quota:lastQuota?.quota,gateway:nineRouter.enabled,gatewayUsage:usageSummary(readGatewayUsage()),semantic:{mode:semanticSettings().mode,effective:semanticMode,last:lastSemanticTrace},blocked,budget:budget().snapshot(),logs:join(root,'events.jsonl')},null,2));return;}
+      save();status();log('command',{command:cmd});
     }
   });
 }

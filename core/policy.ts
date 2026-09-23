@@ -46,7 +46,7 @@ export interface RouteModel {
   /**
    * Stable provider identity used for capability and preference decisions.
    * `ref` remains the concrete transport/model reference returned in a
-   * decision (for example, `9router/cx/gpt-5.6-sol`).
+   * decision (for example, `9router/cx/gpt-6-sol`).
    */
   canonicalRef?: string;
   /** A gateway route is a transport choice, not a second native account. */
@@ -89,8 +89,6 @@ export interface RouteInput {
    * Not a user command and not persisted across handoffs.
    */
   childFloor?: { tier: RouteTier; phase: RoutePhase };
-  /** An explicit user choice, never an inferred provider/model name in task text. */
-  manualPin?: { model: string; effort?: Effort };
   contextTokens: number;
   /** False only when integration proves no prior assistant work exists. */
   hasWorkContext?: boolean;
@@ -98,7 +96,7 @@ export interface RouteInput {
   needsImages?: boolean;
   needsTools?: boolean;
   boundary?: "user" | "child" | "phase" | "compaction" | "provider-failure" | "tool";
-  task?: { bounded?: boolean; acceptanceDefined?: boolean; highValue?: boolean; failedQualityChecks?: number };
+  task?: { bounded?: boolean; acceptanceDefined?: boolean; failedQualityChecks?: number };
   promotion?: { active: boolean; confirmedAt: number };
   paidFallback?: { authorized: boolean; budgetReserved: boolean; allowedModels: string[] };
   /** A visible work-state handoff exists before leaving Fable's reasoning format. */
@@ -214,7 +212,6 @@ export interface ResolveAssessmentInput {
   previousTurnErrored?: boolean;
   /** Prior user turns in the session; 0 means first turn. Measured 6x struggle rate; blocks downgrades. */
   priorUserTurns?: number;
-  highValue?: boolean;
   failedQualityChecks?: number;
 }
 
@@ -266,8 +263,7 @@ export function resolveClassification(input: ResolveAssessmentInput): { tier: Ro
     // after a clean one, and 25% on a session's first turn vs ~4% later. Both
     // are deterministic and block a downgrade regardless of what Jev says.
     const downgradeGuard =
-      input.highValue === true ? "high-value work never downgrades"
-      : (input.failedQualityChecks ?? 0) > 0 ? "unresolved quality failure blocks downgrade"
+      (input.failedQualityChecks ?? 0) > 0 ? "unresolved quality failure blocks downgrade"
       : input.previousTurnErrored === true ? "previous turn errored; struggle rate is 4x after an error"
       : input.priorUserTurns === 0 ? "first turn of a session; no established work to lean on"
       : (assessment.highImpactProbability ?? 0) >= 0.5 ? "high-impact signal blocks downgrade"
@@ -326,13 +322,13 @@ function secondProbability(probabilities: Record<string, number>, selected: stri
 
 export const MODELS = {
   astra: "openai-codex/gpt-6-astra",
-  sol: "openai-codex/gpt-5.6-sol",
-  luna: "openai-codex/gpt-5.6-luna",
+  sol: "openai-codex/gpt-6-sol",
+  luna: "openai-codex/gpt-6-luna",
   deepseek: "opencode-go/deepseek-v4.1-flash",
   glm: "opencode-go/glm-5.3-flash",
   fable: "anthropic/claude-fable-5-1",
   sonnet: "anthropic/claude-sonnet-5",
-  opus: "anthropic/claude-opus-5",
+  opus: "anthropic/claude-opus-5-5",
 } as const;
 
 const TIERS: RouteTier[] = ["mechanical", "bounded", "execution", "complex", "premium"];
@@ -349,7 +345,19 @@ const QUALIFICATIONS: Record<string, RouteTier[]> = {
   [MODELS.fable]: TIERS,
 };
 
-interface Classification { tier: RouteTier; phase: RoutePhase; uncertain: boolean; continuation: boolean; phaseLocked?: boolean }
+interface Classification { tier: RouteTier; phase: RoutePhase; uncertain: boolean; continuation: boolean; phaseLocked?: boolean; override?: boolean }
+/**
+ * The human already decided. A named model or tier after "use"/"switch to"
+ * outranks every rule and every semantic assessment; the caller skips the
+ * classifier entirely. Bare tier words need a terminator ("use strong." or
+ * "use strong model") so "use strong typing" is not an override.
+ */
+const OVERRIDE = /\b(?:use|switch to|route to|usa|usar|com|with)\s+(?:the\s+|o\s+|a\s+)?(haiku|luna|glm|deepseek|sonnet|opus|sol|fable|astra|(?:fast|balanced|strong|premium)(?=\s+(?:model|tier|modelo)\b|\s*[.,!?]|\s*$))/im;
+const OVERRIDE_TIER: Record<string, RouteTier> = { haiku: "bounded", luna: "bounded", glm: "bounded", deepseek: "bounded", fast: "bounded", sonnet: "execution", balanced: "execution", opus: "complex", sol: "complex", strong: "complex", fable: "premium", astra: "premium", premium: "premium" };
+export function detectOverride(prompt: string): RouteTier | undefined {
+  const hit = OVERRIDE.exec(normalize(prompt));
+  return hit ? OVERRIDE_TIER[hit[1]] : undefined;
+}
 const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 const rank = (tier: RouteTier) => TIERS.indexOf(tier);
 const canonicalModelRef = (model: RouteModel): string => model.canonicalRef ?? model.ref;
@@ -374,6 +382,8 @@ function implementationCapabilityText(text: string): string {
 }
 
 function classify(input: RouteInput): Classification {
+  const override = detectOverride(input.prompt);
+  if (override) return { tier: override, phase: input.previous?.phase ?? input.current?.phase ?? "implementation", uncertain: false, continuation: false, override: true };
   const text = normalize(input.prompt).trim();
   // A child spawned as an implementation worker with an explicit contract may
   // have its capability text lightly de-noised of contract boilerplate.
@@ -490,9 +500,9 @@ function classify(input: RouteInput): Classification {
 }
 
 /** The deterministic rules classification of this request, for the caller to combine with semantic evidence. */
-export function classifyTask(input: RouteInput): { tier: RouteTier; phase: RoutePhase } {
-  const { tier, phase } = classify(input);
-  return { tier, phase };
+export function classifyTask(input: RouteInput): { tier: RouteTier; phase: RoutePhase; override?: boolean } {
+  const { tier, phase, override } = classify(input);
+  return override ? { tier, phase, override } : { tier, phase };
 }
 
 /**
@@ -609,13 +619,7 @@ function preference(tier: RouteTier, phase: RoutePhase, input: RouteInput): stri
     return [MODELS.astra, MODELS.fable, MODELS.sol, MODELS.opus, MODELS.sonnet];
   }
   if (phase === "implementation") return [...workers, MODELS.astra, MODELS.fable, MODELS.sol, MODELS.sonnet, MODELS.opus];
-  if (phase === "investigation") {
-    // High-value work may explicitly spend the premium reserve; ordinary
-    // research still prefers Astra even when its inferred tier is premium.
-    return tier === "premium" && input.task?.highValue
-      ? [MODELS.fable, MODELS.astra, MODELS.opus]
-      : [MODELS.astra, MODELS.opus, MODELS.fable];
-  }
+  if (phase === "investigation") return [MODELS.astra, MODELS.opus, MODELS.fable];
   switch (tier) {
     case "mechanical": return [MODELS.luna, MODELS.sol, ...workers, MODELS.sonnet, MODELS.astra, MODELS.opus, MODELS.fable];
     case "bounded": return [...workers, MODELS.sol, MODELS.sonnet, MODELS.astra, MODELS.opus, MODELS.fable];
@@ -709,7 +713,7 @@ function allocationHeadroom(model: RouteModel, input: RouteInput): number {
       .reduce((sum, entry) => sum + entry.count, 0);
     value = value / (1 + load);
   }
-  if (!input.task?.highValue && state === "reserve") value = value / 2;
+  if (state === "reserve") value = value / 2;
   return value;
 }
 
@@ -743,14 +747,6 @@ export function decideRoute(input: RouteInput): RouteDecision {
     model: model.ref, effort: modelEffort(model, tier, input, effort), tier, phase, reason,
     quotaState: quotaState(model, input), rejected,
   });
-
-  if (input.manualPin) {
-    const pinned = input.models.find(model => model.ref === input.manualPin!.model);
-    if (!pinned) return unavailable("The explicitly pinned model is absent; automatic substitution is disabled.");
-    const why = rejection(pinned, tier, input, true);
-    if (why) { rejected.push({ model: pinned.ref, reason: why }); return unavailable("The explicit pin is unavailable: " + why + "."); }
-    return decisionFor(pinned, "Explicit user model pin takes precedence over automatic routing.", input.manualPin.effort ?? input.current?.effort);
-  }
 
   if (input.boundary === "tool") {
     if (!current) return unavailable("No established route exists for this tool-loop continuation.");

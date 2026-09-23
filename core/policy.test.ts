@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MODELS, PRESSURE_SWAP_RATIO, pressure, decideRoute, admitAttempt, childFloorFor, type QuotaSnapshot, type RouteInput, type RouteModel } from "./policy";
+import { MODELS, PRESSURE_SWAP_RATIO, pressure, decideRoute, admitAttempt, childFloorFor, classifyTask, detectOverride, type QuotaSnapshot, type RouteInput, type RouteModel } from "./policy";
 import { gatewayQuota } from "./ninerouter-usage";
 
 const NOW = Date.parse("2026-09-16T12:00:00Z");
@@ -90,10 +90,18 @@ test("within a cost class, the candidate with meaningfully more headroom wins", 
   expect(decision.reason).toContain("Headroom:");
 });
 
-test("highValue lets a reserve window count at full headroom but does not change class order", () => {
-  const decision = decideRoute(input(snapshot(0.19, 67), { task: { highValue: true } }));
-  // Headroom still decides within the premium class; highValue only stops the reserve halving.
-  expect(decision.model).toBe("9router/cc/claude-fable-5-1");
+describe("prompt override", () => {
+  test("a named tier or model outranks every rule", () => {
+    expect(classifyTask(input(snapshot(0.5, 10), { prompt: "rename the file, use opus" }))).toEqual({ tier: "complex", phase: "implementation", override: true });
+    expect(detectOverride("Switch to Fable for this")).toBe("premium");
+    expect(detectOverride("usa o luna aqui")).toBe("bounded");
+  });
+  test("tier words without a terminator are ordinary prose", () => {
+    expect(detectOverride("use strong typing here")).toBeUndefined();
+    expect(detectOverride("go with fast iteration")).toBeUndefined();
+    expect(detectOverride("use strong.")).toBe("complex");
+    expect(classifyTask(input(snapshot(0.5, 10), { prompt: "plan the migration" })).override).toBeUndefined();
+  });
 });
 
 test("small headroom differences fall through to the reviewed preference order", () => {
@@ -136,7 +144,7 @@ test("a subscription route beats a paid route in the same class", () => {
     quota: { observedAt: NOW - 1_000, state: "healthy", windows: [{ id: "cash", remainingFraction: 1 }] },
   };
   const subSol: RouteModel = {
-    ref: "9router/cx/gpt-5.6-sol", canonicalRef: MODELS.sol, gateway: true, authenticated: true,
+    ref: "9router/cx/gpt-6-sol", canonicalRef: MODELS.sol, gateway: true, authenticated: true,
     contextWindow: 400_000, supportsTools: true, supportsImages: false,
     quota: { observedAt: NOW - 1_000, state: "healthy", windows: [{ id: "weekly", remainingFraction: 0.3, resetsAt: NOW + 100 * HOUR }] },
   };

@@ -543,32 +543,6 @@ export function refreshNineRouterUsage(root: string, options: NineRouterRefreshO
   inFlightRefreshes.set(root,pending);
   return pending;
 }
-/** Login once and return a cookie-bound request helper for admin mutations (e.g. priority swaps). */
-export async function nineRouterSession(options: { root?: string; origin?: string; fetch?: FetchLike; opRead?: (ref: string, signal?: AbortSignal) => Promise<string>; timeoutMs?: number } = {}): Promise<{ request: (path: string, init?: RequestInit) => Promise<any> } | undefined> {
-  const origin = options.origin ?? nineRouterOrigin(options.root);
-  if (!origin) return undefined;
-  const timeoutMs = options.timeoutMs ?? 15_000;
-  const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
-  const opRead = options.opRead ?? ((reference: string, signal?: AbortSignal) => readPasswordFromOp(reference, signal ?? timeoutSignal(timeoutMs)));
-  let cookie: string;
-  try {
-    const password = String(await opRead(NINE_ROUTER_PASSWORD_REF, timeoutSignal(timeoutMs))).trim();
-    if (!password) throw new Error(SAFE_ERROR);
-    const login = await jsonRequest(fetchImpl, origin, '/api/auth/login', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password }),
-    }, timeoutMs, false);
-    cookie = responseCookie(login.response) ?? '';
-    if (!cookie) throw new Error(SAFE_ERROR);
-  } catch {
-    return undefined;
-  }
-  return {
-    request: (path: string, init: RequestInit = {}) => jsonRequest(fetchImpl, origin, path, { ...init, headers: { cookie, ...(init.headers ?? {}) } }, timeoutMs),
-  };
-}
-
 async function refreshUsageOnce(root: string, options: NineRouterRefreshOptions = {}): Promise<NineRouterUsageCache> {
   const now = options.now ?? (() => Date.now());
   const observedAt = now();
@@ -865,8 +839,7 @@ export function gatewayQuota(modelId: string, cache: NineRouterUsageCache | unde
   const selectedAccounts = selected.map(entry => entry.account);
   const classified = selected.map(entry => classifyAccount(entry.account, modelId, observedAt, now, entry.provider));
   // Locked accounts cannot serve this model. Among the rest, the best state
-  // wins: Phase 3 priority steering makes the best usable account the one
-  // 9router's fill-first will actually select.
+  // wins: the gateway's quota-aware selection serves from the best usable account.
   const usableResults = classified.filter(value => !value.locked && value.state !== 'depleted');
   const usable = usableResults.map(value => value.state);
   const state: QuotaState = !usable.length ? 'depleted'

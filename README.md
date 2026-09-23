@@ -39,13 +39,19 @@ holdout. See [Evidence](#evidence).
 > routing policy in `policy.ts` is a reviewed personal roster you are meant to
 > replace with your own.
 
-The router has exactly two user-facing states:
+The router is a model in the picker, not a mode. It registers one entry,
+**`router/router` ("Router (auto)")**, next to every real model:
 
-- **auto** — rules decide the capability floor; Jev (TypeSafe's System One
-  model) refines it when a key is present; quota and money pick the cheapest
-  qualified route. The status line always shows which one decided:
-  `route auto · jev · astra` or `route auto · rules · astra`.
-- **pin** — your model, no classification, no spend.
+- **Router (auto) selected** — rules decide the capability floor; Jev
+  (TypeSafe's System One model) refines it when a key is present; quota and
+  money pick the cheapest qualified route. The request streams through the
+  chosen model while the picker stays on Router. The status line shows who
+  decided: `route auto · jev · astra`, `route auto · rules · astra`, or
+  `route auto · override · sol`.
+- **Any concrete model selected** — manual. No classification, no spend.
+- **Prompt override** — `use opus`, `switch to luna`, `use strong.` sets the
+  tier for that turn; the classifier is skipped, the pool still picks the
+  route inside that tier.
 
 ## How a turn is routed
 
@@ -159,14 +165,11 @@ Session state is committed only after the route was actually applied.
 | Command | Effect |
 |---|---|
 | `/route` | status JSON |
-| `/route auto` | automatic routing (rules + Jev if keyed) |
-| `/route off` | manual; keep whatever model is selected |
-| `/route pin <provider/model>` | fix a model for this session |
+| (none) | pick **Router (auto)** in `/model` for automatic routing; pick a concrete model for manual |
 | `/route key` | import the TypeSafe key from 1Password (`AgentKit - Typesafe`) into omp's credential store. `status` / `clear` |
 | `/route why` | one deterministic sentence explaining the last decision |
 | `/route feedback fail\|success` | record a quality outcome; two failures escalate the tier |
 | `/route handoff` | mark work state safe to leave the current model/family |
-| `/route high-value` | allow spending soft reserves; disables headroom swaps |
 | `/route roster` | review catalog findings, probe candidates, vet them |
 | `/route usage` / `refresh` / `reconcile` | 9Router telemetry and paid-ledger reconciliation |
 
@@ -215,7 +218,6 @@ Environment — deployment facts, no personal defaults shipped:
 
 | Key | Default | Effect |
 |---|---|---|
-| `enabled` | `true` | `false` disables routing entirely; omp keeps whatever model is selected. |
 | `gateway` | — | 9Router transport config. `gateway.enabled` toggles it; `gateway.baseUrl` is your gateway's `/v1` endpoint and is also where the admin origin comes from. |
 | `paidFallbackEnabled` | `false` | allows falling back to paid OpenRouter routes when no subscription route qualifies. Every paid call still needs a reserved budget. |
 | `dailyCashCapUsd` | `10` | hard daily ceiling for paid spend. |

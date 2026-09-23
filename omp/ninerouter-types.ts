@@ -20,6 +20,7 @@ export interface NineRouterDescription {
   supportsImages?: boolean;
   supportsTools?: boolean;
   reasoning?: boolean;
+  thinking?: { efforts: string[] };
   autoQualified?: boolean;
   reason?: string;
 }
@@ -33,6 +34,7 @@ export interface NineRouterModel {
   gateway: true;
   baseUrl: string;
   reasoning?: boolean;
+  thinking?: { efforts: string[] };
   input: string[];
   contextWindow?: number;
   maxTokens?: number;
