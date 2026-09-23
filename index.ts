@@ -14,8 +14,7 @@ import { buildSessionContext, AgentRegistry, MAIN_AGENT_ID } from '@oh-my-pi/pi-
 import { writeFanout, readSiblings, readInFlightWindows, removeFanout } from './fanout';
 import { installNineRouter as installNineRouterBundle } from './ninerouter';
 import type { NineRouterController } from './ninerouter-types';
-import { gatewayQuota, readNineRouterUsage, refreshNineRouterUsage, nineRouterSession, readPasswordFromOp, NINE_ROUTER_REFRESH_THROTTLE_MS } from './ninerouter-usage';
-import { steerAccounts } from './accounts';
+import { gatewayQuota, readNineRouterUsage, refreshNineRouterUsage, readPasswordFromOp, NINE_ROUTER_REFRESH_THROTTLE_MS } from './ninerouter-usage';
 import { installProviderDiagnostics, unsupportedModel } from './diagnostics';
 import { buildRoutingContext, assessmentCacheKey, JEV_SCHEMA_VERSION, JEV_QUESTION_SET_VERSION } from './routing-context';
 import { AssessmentCache, cacheKeyFor } from './assessment-cache';
@@ -30,8 +29,6 @@ const installNineRouter=installNineRouterBundle as (pi:unknown,options:{root:str
 const VERSION='1.3.0';
 const REFS=['openai-codex/gpt-6-astra','openai-codex/gpt-5.6-sol','openai-codex/gpt-5.6-luna','anthropic/claude-fable-5-1','anthropic/claude-sonnet-5','anthropic/claude-opus-5','opencode-go/deepseek-v4.1-flash','opencode-go/glm-5.3-flash'];
 const BACKUPS=['openrouter/openai/gpt-5.6-sol','openrouter/anthropic/claude-opus-5','openrouter/openai/gpt-6-astra'];
-const STEER_INTERVAL_MS=600_000;
-const steerThrottle:Record<string,number>={};
 /** After three consecutive classifier transport failures, stop calling it for this long. */
 const CLASSIFIER_BACKOFF_MS=120_000;
 const ref=(model:any)=>model ? `${model.provider}/${model.id}` : undefined;
@@ -439,18 +436,6 @@ export default function personalRouter(pi:any) {
       // "jev" only when a usable assessment actually shaped the executed decision.
       lastSource=input.classification?'jev':'rules';
       let decision=decideRoute(input);
-      if(input.boundary==='user'&&decision.model){
-        const target=routeModels.find((m:any)=>m.ref===decision.model);
-        const targetQuota=target?.quota;
-        // Steering only makes sense for gateway routes: 9router owns the account choice.
-        const wp=target?.gateway?(target.canonicalRef??'').split('/',1)[0]:'';
-        const steerProvider=wp==='anthropic'?'claude':wp==='openai-codex'?'codex':wp==='opencode-go'?'opencode-go':undefined;
-        if(targetQuota&&steerProvider&&Date.now()-(steerThrottle[steerProvider]??0)>=STEER_INTERVAL_MS){
-          steerThrottle[steerProvider]=Date.now();
-          const provider=steerProvider;
-          steerAccounts({provider,snapshot:targetQuota,session:()=>nineRouterSession({root}),log}).catch(()=>{});
-        }
-      }
       if(decision.action==='unavailable'&&cfg.paidFallbackEnabled&&!state.pin){
         await reconcile(ctx);
         // This second pass proposes a candidate only. No switch/dispatch occurs until atomic reservation succeeds below.
