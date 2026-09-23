@@ -195,7 +195,7 @@ log, session corpus) lives in `~/.omp/agent/personal-router/`, never in this
 repo. `PI_CODING_AGENT_DIR` overrides the agent directory.
 
 **Before it routes anything for you**, edit `policy.ts`: `MODELS`, the roster
-in `REFS`/`BACKUPS` (`index.ts`), and `QUALIFICATIONS` encode which models the
+in `REFS`/`BACKUPS` (`omp/index.ts`), and `QUALIFICATIONS` encode which models the
 author reviewed and trusts for which tier. They are a personal decision, not a
 benchmark. Catalog presence is never qualification.
 
@@ -243,22 +243,22 @@ bun run typecheck   # strict, every owned module including index.ts
 
 | File | Owns |
 |---|---|
-| `index.ts` | omp hooks, session state, commands, per-attempt admission |
-| `policy.ts` | pure routing policy: `classifyTask`, `resolveClassification`, `admitAttempt`, allocation |
-| `episode.ts` | task episodes: goal, phase, decision epoch |
-| `ninerouter-types.ts` | hand-owned contract for the generated transport bundle |
-| `jev-questions.ts` | the seven typed questions sent to Jev; the only place rubric text lives |
-| `jev-client.ts` | dependency-free native TypeSafe client; one attempt, hard deadline, strict validation |
-| `routing-context.ts` | bounded, redacted task state; HMAC cache keys |
-| `assessment-cache.ts` | TTL + single-flight, bounded-eviction cache of assessments |
-| `budget.ts` | atomic cash ledger with purpose sub-caps |
-| `roster-monitor.ts` | catalog comparison; emits proposals, never edits |
-| `roster-probe.ts` | capability probe; five real calls, stops before harming a provider |
-| `roster-ui.ts` | `/route roster` review screen: findings, probe, vet |
-| `ninerouter-usage.ts` | 9Router telemetry, per-account windows, exhaustion tombstones |
-| `quota.ts` / `meridian.ts` | native and Meridian quota adapters |
-| `guarded-openrouter.ts` | paid transport guard; rejects unbudgeted calls |
-| `ninerouter.ts` | **generated bundle** of the 9Router transport + model catalog; do not hand-edit. It carries `@ts-nocheck` (emitted without annotations) and is excluded from `tsconfig.json`; the surface the router depends on is typed in `ninerouter-types.ts`, so drift after regeneration fails the typecheck at the call sites. |
+| `omp/index.ts` | OMP extension entrypoint: hooks, session state, commands, per-attempt admission |
+| `core/policy.ts` | pure routing policy: `classifyTask`, `resolveClassification`, `admitAttempt`, allocation |
+| `core/episode.ts` | task episodes: goal, phase, decision epoch |
+| `omp/ninerouter-types.ts` | hand-owned contract for the generated transport bundle |
+| `core/jev-questions.ts` | the seven typed questions sent to Jev; the only place rubric text lives |
+| `core/jev-client.ts` | dependency-free native TypeSafe client; one attempt, hard deadline, strict validation |
+| `core/routing-context.ts` | bounded, redacted task state; HMAC cache keys |
+| `core/assessment-cache.ts` | TTL + single-flight, bounded-eviction cache of assessments |
+| `core/budget.ts` | atomic cash ledger with purpose sub-caps |
+| `core/roster-monitor.ts` | catalog comparison; emits proposals, never edits |
+| `core/roster-probe.ts` | capability probe; five real calls, stops before harming a provider |
+| `omp/roster-ui.ts` | `/route roster` review screen: findings, probe, vet |
+| `core/ninerouter-usage.ts` | 9Router telemetry, per-account windows, exhaustion tombstones |
+| `core/quota.ts` / `core/meridian.ts` | native and Meridian quota adapters |
+| `core/guarded-openrouter.ts` | paid transport guard; rejects unbudgeted calls |
+| `omp/ninerouter.ts` | **generated bundle** of the 9Router transport + model catalog; do not hand-edit. It carries `@ts-nocheck` (emitted without annotations) and is excluded from `tsconfig.json`; the surface the router depends on is typed in `omp/ninerouter-types.ts`, so drift after regeneration fails the typecheck at the call sites. |
 
 ## Evidence
 

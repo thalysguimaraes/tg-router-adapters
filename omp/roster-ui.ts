@@ -11,9 +11,9 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { analyzeRoster, fetchCatalogs, ROSTER, type RosterFinding } from './roster-monitor';
-import { probeModel, type ProbeResult, type QualificationRecord } from './roster-probe';
-import { isObjectGuard } from './type-guards';
+import { analyzeRoster, fetchCatalogs, ROSTER, type RosterFinding } from '../core/roster-monitor';
+import { probeModel, type ProbeResult, type QualificationRecord } from '../core/roster-probe';
+import { isObjectGuard } from '../core/type-guards';
 
 export interface RosterUIContext {
   /** omp's extension UI surface (select / confirm / notify). */

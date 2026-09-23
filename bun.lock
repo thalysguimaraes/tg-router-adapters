@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "tg-router",
+      "name": "tg-router-adapters",
       "devDependencies": {
         "@types/node": "^22",
         "bun-types": "latest",

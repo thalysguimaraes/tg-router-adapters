@@ -9,7 +9,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { analyzeRoster, fetchCatalogs, ROSTER, type RosterReport } from '../roster-monitor';
+import { analyzeRoster, fetchCatalogs, ROSTER, type RosterReport } from '../core/roster-monitor';
 
 const root = process.env.OMP_PERSONAL_ROUTER_HOME ?? join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.omp', 'agent'), 'personal-router');
 mkdirSync(root, { recursive: true, mode: 0o700 });

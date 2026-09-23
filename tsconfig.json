@@ -13,39 +13,14 @@
     "allowImportingTsExtensions": true
   },
   "include": [
-    "index.ts",
-    "ninerouter-types.ts",
-    "meridian.ts",
-    "guarded-openrouter.ts",
-    "diagnostics.ts",
-    "pipeline.test.ts",
-    "episode.ts",
-    "policy.ts",
-    "routing-context.ts",
-    "jev-client.ts",
-    "jev-questions.ts",
-    "assessment-cache.ts",
-    "type-guards.ts",
-    "budget.ts",
-    "quota.ts",
-    "ninerouter-usage.ts",
-    "fanout.ts",
-    "promotion.ts",
-    "context-tools.ts",
-    "semantic.test.ts",
-    "policy.test.ts",
-    "ninerouter-usage.test.ts",
-    "fanout.test.ts",
-    "roster-monitor.ts",
-    "roster-monitor.test.ts",
-    "roster-probe.ts",
-    "roster-ui.ts",
-    "roster-probe.test.ts",
+    "core/**/*.ts",
+    "omp/**/*.ts",
     "scripts/calibrate.ts",
     "scripts/relabel.ts"
   ],
   "exclude": [
-    "ninerouter.ts",
+    "omp/diagnostics.test.ts",
+    "omp/ninerouter.ts",
     "node_modules"
   ]
 }

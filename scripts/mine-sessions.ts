@@ -9,7 +9,7 @@
 import { readdirSync, statSync, createReadStream, mkdirSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join, basename } from 'node:path';
-import { redactAndClip } from '../routing-context';
+import { redactAndClip } from '../core/routing-context';
 import { homedir } from 'node:os';
 
 // Same resolution the extension uses, so a scratch run can be pointed elsewhere.

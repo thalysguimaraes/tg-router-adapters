@@ -29,10 +29,10 @@ import { execSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { buildRoutingContext } from '../routing-context';
-import { JEV_QUESTIONS } from '../jev-questions';
-import { JEVS_CLASSIFIER_MODEL } from '../jev-client';
-import { MODELS } from '../policy';
+import { buildRoutingContext } from '../core/routing-context';
+import { JEV_QUESTIONS } from '../core/jev-questions';
+import { JEVS_CLASSIFIER_MODEL } from '../core/jev-client';
+import { MODELS } from '../core/policy';
 
 const root = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.omp', 'agent'), 'personal-router');
 mkdirSync(root, { recursive: true, mode: 0o700 });
