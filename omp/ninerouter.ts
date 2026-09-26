@@ -21262,17 +21262,23 @@ function resolveNineRouterOrigin(settings) {
 }
 var NINEROUTER_MAX_OUTPUT_TOKENS = 32768;
 var DEFAULT_CONTEXT_WINDOW = 128000;
-var SUBSCRIBED_PREFIXES = new Set(["cc", "cx", "ocg", "glm"]);
+var SUBSCRIBED_PREFIXES = new Set(["cc", "cx", "ocg", "glm", "cerebras"]);
 var PAYG_PREFIXES = new Set(["ds", "openrouter", "or"]);
 var CANONICAL_PROVIDERS = {
   cc: "anthropic",
   cx: "openai-codex",
   ocg: "opencode-go",
-  glm: "zai-coding-plan"
+  glm: "zai-coding-plan",
+  cerebras: "cerebras"
 };
 var NATIVE_APIS = {
   cc: "anthropic-messages",
   cx: "openai-responses"
+};
+// Cerebras rejects unknown body fields (`store`, `thinking`, `enable_thinking`);
+// compat is otherwise derived from the gateway host, which hides the upstream.
+var PREFIX_COMPAT = {
+  cerebras: { supportsStore: false, thinkingFormat: "openai" }
 };
 // Per-model overrides win over the prefix default: opencode-go serves union-alpha
 // only on the Anthropic Messages shape; /v1/chat/completions answers 500 for it.
@@ -21684,7 +21690,7 @@ function installNineRouter(pi, options) {
       token: undefined,
       accessToken: undefined,
       transport: undefined,
-      compat: undefined,
+      compat: PREFIX_COMPAT[record.prefix],
       api: nativeApi,
       baseUrl: NINEROUTER_BASE_URL
     });
@@ -21703,6 +21709,11 @@ function installNineRouter(pi, options) {
     sanitizedOptions.headers = undefined;
     sanitizedOptions.fetch = guardedFetch(key, nativeApi, record.id, record.maxTokens, delegate, options.log);
     sanitizedOptions.maxInFlightRequests = {};
+    // OMP resolves `/fast` per provider family, and a custom api has none, so the
+    // host never forwards a tier here. Apply the session's OpenAI tier ourselves;
+    // the native transport still gates what reaches the wire.
+    const openaiTier = nativeApi === "openai-responses" ? pi.getServiceTiers?.()?.openai : undefined;
+    if (openaiTier) sanitizedOptions.serviceTier = openaiTier;
     return options.nativeStreamSimple(nativeModel, context, sanitizedOptions);
   };
   try {

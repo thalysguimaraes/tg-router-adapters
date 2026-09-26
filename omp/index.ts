@@ -7,7 +7,7 @@ import { inspectQuotas } from '../core/quota';
 import { getPromotion } from '../core/promotion';
 import { inspectMeridian, withMeridianProfile } from '../core/meridian';
 import { BudgetLedger, estimateUpperBoundUsd } from '../core/budget';
-import { streamSimple, registerCustomApi, unregisterCustomApis } from '@oh-my-pi/pi-ai';
+import { streamSimple, registerCustomApi, unregisterCustomApis, resolveModelServiceTier } from '@oh-my-pi/pi-ai';
 import { installGuardedOpenRouter, guardOpenRouterModel, GUARDED_OPENROUTER_MARKER } from '../core/guarded-openrouter';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { buildSessionContext, AgentRegistry, MAIN_AGENT_ID } from '@oh-my-pi/pi-coding-agent';
@@ -256,6 +256,23 @@ export default function personalRouter(pi:any) {
     }catch{return{siblings:[]};}
   }
   nineRouter=installNineRouter(pi,{root,nativeStreamSimple:streamSimple,log});
+  // OMP's `/fast` keys off the model's provider family; `9router/*` and
+  // `router/router` are custom apis with none, so the builtin refuses them.
+  // Toggle the OpenAI family tier here; the transports apply it to OpenAI routes.
+  // ponytail: OpenAI only. Gateway Claude rejects `speed: fast` without usage credits.
+  pi.on('input',(event:any,ctx:any)=>{
+    const match=/^\/fast(?:\s+(\S+))?$/i.exec(event.text?.trim()??'');
+    const m=ctx.model??ctx.models.current();
+    if(!match||!(isAuto(m)||(m?.provider===nineRouter.provider&&m.id.startsWith('cx/'))))return;
+    const arg=(match[1]??'toggle').toLowerCase();
+    const on=pi.getServiceTiers().openai==='priority';
+    if(arg==='status'){ctx.ui.notify(`Fast mode is ${on?'on':'off'} (OpenAI routes).`);return{handled:true};}
+    const next=arg==='on'?true:arg==='off'?false:arg==='toggle'?!on:undefined;
+    if(next===undefined){ctx.ui.notify('Usage: /fast [on|off|status]','warning');return{handled:true};}
+    pi.setServiceTier('openai',next?'priority':undefined);
+    ctx.ui.notify(`Fast mode ${next?'enabled':'disabled'} (OpenAI routes).`);
+    return{handled:true};
+  });
   // The router is a model in the picker, not a mode. Selecting `router/auto`
   // routes; selecting any concrete model is manual, no command needed.
   // ponytail: contextWindow is a static ceiling; per-attempt admission checks the real route's window.
@@ -267,6 +284,8 @@ export default function personalRouter(pi:any) {
       const target=route.target;
       const opts={...options,apiKey:ctxCurrent.modelRegistry.resolver(target,ctxCurrent.sessionManager.getSessionId()),headers:undefined,fetch:undefined,maxInFlightRequests:{}};
       if(route.effort)opts.reasoning=route.effort;
+      // Host resolved the tier against `router/router` (no family); re-resolve for the real target.
+      opts.serviceTier=resolveModelServiceTier(pi.getServiceTiers(),target);
       return streamSimple(target,context,opts);
     },
   });
