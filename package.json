@@ -10,7 +10,9 @@
   "homepage": "https://github.com/thalysguimaraes/tg-router-adapters#readme",
   "type": "module",
   "omp": {
-    "extensions": ["./omp/index.ts"]
+    "extensions": [
+      "./omp/provider.ts"
+    ]
   },
   "scripts": {
     "test": "bun test",

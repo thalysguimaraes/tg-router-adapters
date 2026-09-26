@@ -197,6 +197,11 @@ apply on the next omp session. Runtime state (ledger, quota cache, decision
 log, session corpus) lives in `~/.omp/agent/personal-router/`, never in this
 repo. `PI_CODING_AGENT_DIR` overrides the agent directory.
 
+**Entry point.** `package.json` loads `omp/provider.ts`: 9Router models only,
+plus `/fast` for `cx/` routes — no `router/router`, no routing hooks, no
+`/route`. To enable auto-routing, set `omp.extensions` to `./omp/index.ts`
+(it registers the provider itself; never load both).
+
 **Before it routes anything for you**, edit `policy.ts`: `MODELS`, the roster
 in `REFS`/`BACKUPS` (`omp/index.ts`), and `QUALIFICATIONS` encode which models the
 author reviewed and trusts for which tier. They are a personal decision, not a
